@@ -1,14 +1,12 @@
-// Minimal websocket server, V. Ziemann, 170303
-// stripped version of ESPWebSock.ino from https://gist.github.com/bbx10/
-
+// Geoscope, V. Ziemann, 230121
 
 #include "fft.c"
 #define npts 512
 int bits;
 complx wave[npts]; 
 
-const char* ssid     = "messnetz";
-const char* password = "10_8uhb8UHB";
+const char* ssid     = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
 const int port=81;
 
 uint8_t channel=0;
