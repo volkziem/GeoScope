@@ -1,0 +1,253 @@
+<!DOCTYPE HTML>
+<HTML lang="en">
+<head>
+  <title>GeoScope V2</title>
+  <meta charset="UTF-8">
+  <style>
+    #timeline { border: 1px solid black; }
+    #waterfall { border: 1px solid black; }
+    path#trace1 { fill: none; stroke: blue; stroke-width: 1px;} 
+    path#trace2 { fill: none; stroke: green; stroke-width: 1px;} 
+    .button { font-size: smaller; background: #EEEEEE; border-radius: 5px; padding: 3px; border: 1px solid black;}
+  </style>
+</head>
+<body>
+<!--  <H1 ALIGN=CENTER>Volker's GeoScope</H1> -->
+<P> GeoScope v2.0:
+    <button id="fast" type="button" onclick="samplefast();">Start</button>   
+    <button id="faststop" type="button" onclick="samplefaststop();">Stopped</button>
+    <SELECT onchange="setTTW(this.value);">
+      <OPTION value="50">  TTW 50 ms </OPTION>
+      <OPTION value="1000"> TTW 1 s </OPTION>
+      <OPTION value="3000"> TTW 3 s </OPTION>
+      <OPTION value="10000"> TTW 10 s</OPTION>
+      <OPTION value="30000"> TTW 30 s</OPTION>
+    </SELECT>
+    <SELECT onchange="setChannel(this.value);">
+      <OPTION value="0">ChA 0</OPTION>
+      <OPTION value="1">ChA 1</OPTION>
+      <OPTION value="2">ChA 2 </OPTION>
+      <OPTION value="3">ChA 3</OPTION>
+      <OPTION value="4">ChA 4</OPTION>
+      <OPTION value="5">ChA 5</OPTION>
+      <OPTION value="6">ChA 6</OPTION>
+      <OPTION value="7">ChA 7</OPTION>
+    </SELECT>
+</P>
+<P>  
+    <SELECT onchange="setMode(this.value);">
+      <OPTION value="1"> Spectrum </OPTION>
+      <OPTION value="0"> Time domain</OPTION>
+      <OPTION value="3"> Autocorrelation ChA</OPTION>
+      <OPTION value="4"> Cross-correlation A-to-B</OPTION>
+      <OPTION value="5"> Transfer function A-to-B</OPTION>
+    </SELECT>
+    <SELECT onchange="setLocalMode(this.value);">
+      <OPTION value="0">Linear</OPTION>
+      <OPTION value="1">Logarithmic</OPTION>
+    </SELECT>
+    <SELECT onchange="setScale(this.value);">
+      <OPTION value="1"> x 1 </OPTION>
+      <OPTION value="3"> x 3 </OPTION>
+      <OPTION value="10"> x 10 </OPTION>
+      <OPTION value="30"> x 30 </OPTION>
+      <OPTION value="100"> x 100 </OPTION>
+      <OPTION value="300"> x 300 </OPTION>
+    </SELECT>
+<!--    <button id="timedomain" type="button" onclick="timedomain();">Time Domain</button> -->
+    <button id="newoff" type="button" onclick="calculateOffset();">New Offset</button> 
+    <A HREF="#" class="button" id="hardcopy" download="waterfall.png">Hardcopy</A>
+    <A id='ip'>IP address</A>
+<!--  <button id="tester" type="button" onclick="testme();">Tester</button> -->
+  </P>
+  <canvas id="waterFall" width="1024" height="512" style="border:1px solid #000000"> </canvas>
+  <svg id="timeline" width="1024px" height="256px">
+    <path id="trace1" d="M0 120" fill="none" stroke="#FF0000"  />
+    <path id="trace2"  d="M0 120" fill="none" stroke="#FF0000"  />
+  </svg>
+  <div id="tim"> Last update: </div>  
+  <div id="avg"> Average:</div> 
+  <div id="status" style="background-color:lightgrey"> Status display</div>
+  <div id="status2" >Info: select one or two input channels</div>
+  <script>
+    var counter = 0;
+    var ipaddr=location.hostname + ":81";    
+    var offset = 0, offset2=0;
+    var rms = 0;
+    var step = 2;
+    var lmode = 0; // 0=linear, 1=logarithmic, 2=new offset
+    var mode = 1; // 1=spectrum, 0=time
+    scheduleNewOffset=0;
+    var getQueryString= function(field) {
+      var reg = new RegExp("[?&]" + field + "=([^&#]*)", "i");
+      var string=reg.exec(window.location.href);
+      return string ? string[1] : null;
+    };
+    iii=getQueryString("ip");  // check whether address is in query string
+    if (iii != null) {ipaddr=iii;}
+//  console.log(iii);
+    document.getElementById('ip').innerHTML=ipaddr;
+    var websock = new WebSocket('ws://' + ipaddr);
+//  console.log(websock);
+//  var websock = new WebSocket('ws://192.168.2.146:10081');
+    websock.onopen = function(evt) { console.log('websock open'); };
+    websock.onclose = function(evt) {
+      console.log('websock close');
+      toStatus('websock close');
+    };
+    websock.onerror = function(evt) { console.log(evt); toStatus(evt) };
+    websock.onmessage=function(event) {
+//    console.log(event.data);
+      var stuff=JSON.parse(event.data);
+      var val=stuff["WF1"];
+      if (val != undefined) {        //...................trace1
+        if (lmode == 1) {    //...logarithmic scale  
+          ymin=0; ymax=5;
+          k=255/(ymax-ymin);
+          for (i=0; i<val.length; i++) {
+             q=Math.max(val[i],1e-1);
+             val[i]=k*(Math.log(q)-ymin);
+          }
+        }
+        var path = document.getElementById('trace1');
+        var d =path.getAttribute('d');
+        d="M0 511";      
+        step=1024/val.length;
+        for (i=0; i<val.length; i++) {
+          d += ' L' + (step*i) + ' ' + (256-val[i]+offset);
+        } 		  
+        path.setAttribute('d',d);
+        qqq=calculateAverage(val);
+        if (scheduleNewOffset) { 
+          scheduleNewOffset=0; 
+          offset=qqq-128; toStatus("New offset " + offset.toPrecision(5));
+        }
+        updateCanvas(val);
+      } 
+      var val2=stuff["WF2"];          //...................trace2
+      if (val2 != undefined) {    //...logarithmic scale  
+         if (lmode == 1) {
+          ymin=0; ymax=5;
+          k=255/(ymax-ymin);
+          for (i=0; i<val2.length; i++) {
+             q=Math.max(val2[i],1e-1);
+             val2[i]=k*(Math.log(q)-ymin);
+          }
+        }
+        var path = document.getElementById('trace2');
+        var d =path.getAttribute('d');
+        d="M0 511";      
+        step=1024/val2.length;
+        for (i=0; i<val2.length; i++) {
+          d += ' L' + (step*i) + ' ' + (256-val2[i]+offset);
+        } 		  
+        path.setAttribute('d',d);
+       }
+      document.getElementById('tim').innerHTML="Last update: " +
+      Date(event.timeStamp);
+    };
+    function samplefast() {
+      websock.send(JSON.stringify({ "cmd" : "FASTON", "val" : "1" }));
+      document.getElementById('faststop').innerHTML="Stop me";
+      document.getElementById('fast').innerHTML="Running";			    
+    }   
+    function samplefaststop() {
+      websock.send(JSON.stringify({ "cmd" : "FASTOFF", "val" : "-1" }));
+      document.getElementById('faststop').innerHTML="Stopped";
+      document.getElementById('fast').innerHTML="Start me";			    
+    }   
+    function setMode(v) {
+      mode=parseInt(v); toStatus2(" mode = " + mode);
+      switch (mode) {
+        case 0: offset=-146; toStatus("Time domain selected"); break;
+        case 1: offset=0; toStatus("Spectrum selected"); break;
+        case 3: offset=0; toStatus("Autocorrelation selected"); break;
+        case 4: offset=0; toStatus("Cross-correlation selected"); break;
+      }
+      websock.send(JSON.stringify({ "cmd" : "SPECTRUM", "val" : v }));
+    }
+    function setLocalMode(v) {
+      lmode=parseInt(v); 
+      switch (lmode) {		
+        case 0: toStatus("Linear scale"); break;
+        case 1: toStatus("Logarithmic scale"); break;
+      }
+    }
+    function calculateOffset() {
+      offset=0;
+      if (mode == 0) {scheduleNewOffset=1;} 
+    } 
+    function toStatus(txt) {document.getElementById('status').innerHTML=txt; }
+    function toStatus2(txt) {document.getElementById('status2').innerHTML=txt; }
+    function updateCanvas(val) {
+      ctx=waterFall.getContext("2d");
+      img=document.getElementById('waterFall');
+      ctx.drawImage(img,0,1,1024,511,0,0,1024,511);
+      step=1024/val.length;
+      for (i=0; i<val.length; i++) {
+        c=parseInt(offset+256-val[i]);
+	ctx.fillStyle="rgba(" + c + "," + c + "," + c + ",1.0)";
+	ctx.fillRect(step*i,511,step,1);
+      } 
+      toStatus2("mode = " + mode + "  ,   lmode = " + lmode);			
+      if (mode == 0) {
+        ctx.fillStyle='#FF0000';
+        ctx.fillRect(4*parseInt(step*rms),511,step,1);
+      }		  
+    }
+    var but=document.getElementById('hardcopy');
+    but.addEventListener('click',function(e) {
+      var c = document.getElementById('waterFall');
+      var img = c.toDataURL("image/png");
+      but.href = img;
+    });	
+   function calculateAverage(val) {
+      avg=0; min0=1e10; max0=-1e10;
+      for (i=0; i<val.length; i++) {
+         avg+=val[i];
+         min0=Math.min(min0,val[i]);
+         max0=Math.max(max0,val[i]);
+      }
+      avg=avg/val.length;
+      rms=0;
+      for (i=0; i<val.length; i++) {rms+=(val[i]-avg)*(val[i]-avg);}
+      rms/=val.length;
+      rms=Math.sqrt(rms);		      
+      document.getElementById('avg').innerHTML="Average = " + avg.toPrecision(4) 
+        + " +/- " + rms.toPrecision(3)
+        + "   Min/Max = " + min0.toPrecision(4) + " / " + max0.toPrecision(4);
+      return avg
+    }
+    function setScale(v) {
+      toStatus("Setting the vertical scale for spectrum display to x" + v);
+      websock.send(JSON.stringify({ "cmd" : "SCALE", "val" : v }));
+    }
+    function setTTW(v) {
+      toStatus("Setting the time to wait between taking spectra to " + v + " ms");
+      websock.send(JSON.stringify({ "cmd" : "TTW", "val" : v }));
+    }
+    function setChannel(v) {
+      toStatus("Selecting ADC channel =" + v);
+      websock.send(JSON.stringify({ "cmd" : "CHANNEL", "val" : v }));
+    }
+    function testme() {
+      console.log(getQueryString("ip"));
+    }
+    document.getElementById('timeline').addEventListener('mousedown',showCoordinates, false);
+    function showCoordinates(event) {
+      rect=document.getElementById('timeline').getBoundingClientRect();
+//    toStatus((event.clientX-rect.left) + '   ' + (event.clientY - rect.top));
+      toStatus("Frequency at cursor = " + ((event.clientX-rect.left-1)*500/1024).toPrecision(4) 
+			      + " Hz    at pixel " + (event.clientX-rect.left-1) );  
+    }	
+    document.getElementById('waterFall').addEventListener('mousedown',showCoordinates2, false);
+    function showCoordinates2(event) {
+      rect=document.getElementById('waterFall').getBoundingClientRect();
+//    toStatus((event.clientX-rect.left) + '   ' + (event.clientY - rect.top));
+      toStatus("Frequency at cursor = " + ((event.clientX-rect.left)*500/1024).toPrecision(4) + " Hz");  
+    }	
+  </script>
+</body>
+</html>  
+  
+  
